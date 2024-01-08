@@ -20,9 +20,8 @@ func main() {
 	tempvar := http.FileServer(http.Dir("./static/"))
 	r.Handle("/app", http.StripPrefix("/app", cfg.middlewareMetricsInc(tempvar)))
 	r.Handle("/app/*", http.StripPrefix("/app", cfg.middlewareMetricsInc(tempvar)))
-	r.HandleFunc("/reset", cfg.resetMetric)
-	r.Get("/metrics", cfg.printIt)
-	r.Get("/healthz", responder)
+	r.Mount("/api", apiHandler(&cfg))
+	r.Mount("/admin", adminHandler(&cfg))
 
 	corsMux := middlewareCors(r)
 	localServer := http.Server{
@@ -35,6 +34,20 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
+}
+
+func apiHandler(cfg *apiConfig) http.Handler {
+	r := chi.NewRouter()
+	r.HandleFunc("/reset", cfg.resetMetric)
+	r.Get("/metrics", cfg.printIt)
+	r.Get("/healthz", responder)
+	return r
+}
+
+func adminHandler(cfg *apiConfig) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/metrics", cfg.handlerMetrics)
+	return r
 }
 
 func middlewareCors(next http.Handler) http.Handler {
@@ -73,4 +86,19 @@ func (cfg *apiConfig) printIt(w http.ResponseWriter, req *http.Request) {
 func (cfg *apiConfig) resetMetric(w http.ResponseWriter, req *http.Request) {
 	cfg.fileserverHits = 0
 	w.WriteHeader(http.StatusOK)
+}
+
+func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`
+<html>
+
+<body>
+	<h1>Welcome, Chirpy Admin</h1>
+	<p>Chirpy has been visited %d times!</p>
+</body>
+
+</html>
+	`, cfg.fileserverHits)))
 }
