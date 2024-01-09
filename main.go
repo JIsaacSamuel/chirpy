@@ -7,24 +7,19 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"internal/chirp_validation"
+	"internal/configFuncs"
 )
-
-// Number of times /app is loaded
-type apiConfig struct {
-	fileserverHits int
-}
 
 func main() {
 	// Initialising chi router
 	r := chi.NewRouter()
-	cfg := apiConfig{
-		fileserverHits: 0,
-	}
+	cfg := configFuncs.ApiConfig{}
+	cfg.SetToZero()
 
 	// Handles
 	tempvar := http.FileServer(http.Dir("./static/"))
-	r.Handle("/app", http.StripPrefix("/app", cfg.middlewareMetricsInc(tempvar)))
-	r.Handle("/app/*", http.StripPrefix("/app", cfg.middlewareMetricsInc(tempvar)))
+	r.Handle("/app", http.StripPrefix("/app", cfg.MiddlewareMetricsInc(tempvar)))
+	r.Handle("/app/*", http.StripPrefix("/app", cfg.MiddlewareMetricsInc(tempvar)))
 	r.Mount("/api", apiHandler(&cfg))
 	r.Mount("/admin", adminHandler(&cfg))
 
@@ -44,19 +39,19 @@ func main() {
 }
 
 // api sub-router
-func apiHandler(cfg *apiConfig) http.Handler {
+func apiHandler(cfg *configFuncs.ApiConfig) http.Handler {
 	r := chi.NewRouter()
-	r.HandleFunc("/reset", cfg.resetMetric)
-	r.Get("/metrics", cfg.printIt)
-	r.Get("/healthz", responder)
+	r.HandleFunc("/reset", cfg.ResetMetric)
+	r.Get("/metrics", cfg.PrintIt)
+	r.Get("/healthz", configFuncs.Responder)
 	r.Post("/validate_chirp", chirp_validation.ValidateChirp)
 	return r
 }
 
 // admin sub-router
-func adminHandler(cfg *apiConfig) http.Handler {
+func adminHandler(cfg *configFuncs.ApiConfig) http.Handler {
 	r := chi.NewRouter()
-	r.Get("/metrics", cfg.handlerMetrics)
+	r.Get("/metrics", cfg.HandlerMetrics)
 	return r
 }
 
@@ -73,48 +68,4 @@ func middlewareCors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// function to check if server is running
-func responder(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-// Increases hits
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits++
-		next.ServeHTTP(w, r)
-	})
-}
-
-// Prints hits
-func (cfg *apiConfig) printIt(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Hits: %d", cfg.fileserverHits)))
-}
-
-// Resets hits to 0
-func (cfg *apiConfig) resetMetric(w http.ResponseWriter, req *http.Request) {
-	cfg.fileserverHits = 0
-	w.WriteHeader(http.StatusOK)
-}
-
-// Injects html to print number of hits
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`
-<html>
-
-<body>
-	<h1>Welcome, Chirpy Admin</h1>
-	<p>Chirpy has been visited %d times!</p>
-</body>
-
-</html>
-	`, cfg.fileserverHits)))
 }
