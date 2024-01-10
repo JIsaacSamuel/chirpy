@@ -13,6 +13,7 @@ import (
 	"internal/database"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Chirp struct {
@@ -56,6 +57,7 @@ func main() {
 	apiRouter.Get("/chirps", apiCfg.handlerChirpsRetrieve)
 	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
 	apiRouter.Post("/users", apiCfg.handlerUserCreate)
+	apiRouter.Post("/login", apiCfg.handlerUserValidate)
 	router.Mount("/api", apiRouter)
 
 	adminRouter := chi.NewRouter()
@@ -186,6 +188,7 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
+		Pass  string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -196,7 +199,13 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := cfg.DB.CreateUser(params.Email)
+	hashPass, err := bcrypt.GenerateFromPassword([]byte(params.Pass), 10)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't save login details")
+		return
+	}
+
+	user, err := cfg.DB.CreateUser(params.Email, hashPass)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create user")
 		return
@@ -205,6 +214,37 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 	respondWithJSON(w, http.StatusCreated, User{
 		ID:      user.ID,
 		EmailID: user.EmailID,
+	})
+}
+
+func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+		Pass  string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+
+	pass, err := cfg.DB.GetUser(params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Invalid user")
+		return
+	}
+
+	if bcrypt.CompareHashAndPassword(pass.Password, []byte(params.Pass)) != nil {
+		respondWithError(w, 401, "Incorrect password")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, User{
+		ID:      pass.ID,
+		EmailID: pass.EmailID,
 	})
 }
 
