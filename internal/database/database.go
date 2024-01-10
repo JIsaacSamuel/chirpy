@@ -12,8 +12,14 @@ type DB struct {
 	mu   *sync.RWMutex
 }
 
+type User struct {
+	EmailID string `json:"email"`
+	ID      int    `json:"id"`
+}
+
 type DBStructure struct {
 	Chirps map[int]Chirp `json:"chirps"`
+	Users  map[int]User  `json:"users"`
 }
 
 type Chirp struct {
@@ -21,14 +27,7 @@ type Chirp struct {
 	ID   int    `json:"id"`
 }
 
-func NewDB(path string) (*DB, error) {
-	db := &DB{
-		path: path,
-		mu:   &sync.RWMutex{},
-	}
-	err := db.ensureDB()
-	return db, err
-}
+var ErrNotExist = errors.New("resource does not exist")
 
 func (db *DB) CreateChirp(body string) (Chirp, error) {
 	dbStructure, err := db.loadDB()
@@ -65,9 +64,69 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 	return chirps, nil
 }
 
+func (db *DB) GetChirpByID(num int) (string, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return "", err
+	}
+
+	for id, chirp := range dbStructure.Chirps {
+		if id == num {
+			return chirp.Body, nil
+		}
+	}
+
+	return "", errors.New("Nothing")
+}
+
+func NewDB(path string) (*DB, error) {
+	db := &DB{
+		path: path,
+		mu:   &sync.RWMutex{},
+	}
+	err := db.ensureDB()
+	return db, err
+}
+
+func (db *DB) CreateUser(emailAdd string) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+
+	id := len(dbStructure.Users) + 1
+	user := User{
+		ID:      id,
+		EmailID: emailAdd,
+	}
+	dbStructure.Users[id] = user
+
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return User{}, err
+	}
+
+	return user, nil
+}
+
+// func (db *DB) GetUser(id int) (User, error) {
+// 	dbStructure, err := db.loadDB()
+// 	if err != nil {
+// 		return User{}, err
+// 	}
+
+// 	user, ok := dbStructure.Users[id]
+// 	if !ok {
+// 		return User{}, ErrNotExist
+// 	}
+
+// 	return user, nil
+// }
+
 func (db *DB) createDB() error {
 	dbStructure := DBStructure{
 		Chirps: map[int]Chirp{},
+		Users:  map[int]User{},
 	}
 	return db.writeDB(dbStructure)
 }

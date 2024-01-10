@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"internal/database"
@@ -17,6 +18,11 @@ import (
 type Chirp struct {
 	Body string `json:"body"`
 	ID   int    `json:"id"`
+}
+
+type User struct {
+	EmailID string `json:"email"`
+	ID      int    `json:"id"`
 }
 
 type apiConfig struct {
@@ -48,6 +54,8 @@ func main() {
 	apiRouter.Get("/reset", apiCfg.handlerReset)
 	apiRouter.Post("/chirps", apiCfg.handlerChirpsCreate)
 	apiRouter.Get("/chirps", apiCfg.handlerChirpsRetrieve)
+	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
+	apiRouter.Post("/users", apiCfg.handlerUserCreate)
 	router.Mount("/api", apiRouter)
 
 	adminRouter := chi.NewRouter()
@@ -124,6 +132,26 @@ func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Reque
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
+func (cfg *apiConfig) handlerChirpsRetrieveID(w http.ResponseWriter, r *http.Request) {
+	param := chi.URLParam(r, "chirpsID")
+	v, err := strconv.Atoi(param)
+	if err != nil {
+		log.Fatal("Enter a valid chirp ID")
+	}
+	text, err := cfg.DB.GetChirpByID(v)
+	if err != nil {
+		respondWithError(w, 404, "No chirp found")
+		return
+	}
+
+	chirp := Chirp{
+		Body: text,
+		ID:   v,
+	}
+
+	respondWithJSON(w, http.StatusOK, chirp)
+}
+
 func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
@@ -152,6 +180,31 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 	respondWithJSON(w, http.StatusCreated, Chirp{
 		ID:   chirp.ID,
 		Body: chirp.Body,
+	})
+}
+
+func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+
+	user, err := cfg.DB.CreateUser(params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create user")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, User{
+		ID:      user.ID,
+		EmailID: user.EmailID,
 	})
 }
 
