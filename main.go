@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"internal/auth"
 	"internal/database"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,11 +28,13 @@ type Chirp struct {
 type User struct {
 	EmailID string `json:"email"`
 	ID      int    `json:"id"`
+	Token   string `json:"token"`
 }
 
 type apiConfig struct {
 	fileserverHits int
 	DB             *database.DB
+	SecSig         string
 }
 
 func main() {
@@ -39,10 +45,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	godotenv.Load()
+	jwtSecret := os.Getenv("JWT_SECRET")
 
 	apiCfg := apiConfig{
 		fileserverHits: 0,
 		DB:             db,
+		SecSig:         jwtSecret,
 	}
 
 	router := chi.NewRouter()
@@ -58,6 +67,7 @@ func main() {
 	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
 	apiRouter.Post("/users", apiCfg.handlerUserCreate)
 	apiRouter.Post("/login", apiCfg.handlerUserValidate)
+	// apiRouter.Put("/users",)
 	router.Mount("/api", apiRouter)
 
 	adminRouter := chi.NewRouter()
@@ -185,6 +195,33 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func validateChirp(body string) (string, error) {
+	const maxChirpLength = 140
+	if len(body) > maxChirpLength {
+		return "", errors.New("Chirp is too long")
+	}
+
+	badWords := map[string]struct{}{
+		"kerfuffle": {},
+		"sharbert":  {},
+		"fornax":    {},
+	}
+	cleaned := getCleanedBody(body, badWords)
+	return cleaned, nil
+}
+
+func getCleanedBody(body string, badWords map[string]struct{}) string {
+	words := strings.Split(body, " ")
+	for i, word := range words {
+		loweredWord := strings.ToLower(word)
+		if _, ok := badWords[loweredWord]; ok {
+			words[i] = "****"
+		}
+	}
+	cleaned := strings.Join(words, " ")
+	return cleaned
+}
+
 func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
@@ -217,10 +254,21 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// func (cfg *apiConfig) handlerUserUpdate(w http.ResponseWriter, r *http.Request) {
+// 	r.Header.Get("Authorization")
+
+// }
+
 func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
-		Pass  string `json:"password"`
+		Email      string `json:"email"`
+		Pass       string `json:"password"`
+		ExpiryTime int    `json:"expires_in_seconds"`
+	}
+
+	type response struct {
+		User
+		Token string `json:"token"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -242,37 +290,15 @@ func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, User{
-		ID:      pass.ID,
-		EmailID: pass.EmailID,
+	token, err := auth.MakeJWT(pass.ID, cfg.SecSig, time.Duration(params.ExpiryTime))
+
+	respondWithJSON(w, http.StatusOK, response{
+		User: User{
+			ID:      pass.ID,
+			EmailID: pass.EmailID,
+		},
+		Token: token,
 	})
-}
-
-func validateChirp(body string) (string, error) {
-	const maxChirpLength = 140
-	if len(body) > maxChirpLength {
-		return "", errors.New("Chirp is too long")
-	}
-
-	badWords := map[string]struct{}{
-		"kerfuffle": {},
-		"sharbert":  {},
-		"fornax":    {},
-	}
-	cleaned := getCleanedBody(body, badWords)
-	return cleaned, nil
-}
-
-func getCleanedBody(body string, badWords map[string]struct{}) string {
-	words := strings.Split(body, " ")
-	for i, word := range words {
-		loweredWord := strings.ToLower(word)
-		if _, ok := badWords[loweredWord]; ok {
-			words[i] = "****"
-		}
-	}
-	cleaned := strings.Join(words, " ")
-	return cleaned
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
