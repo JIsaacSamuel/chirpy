@@ -118,6 +118,28 @@ func (db *DB) CreateUser(emailAdd string, hashPass []byte) (User, error) {
 	return user, nil
 }
 
+func (db *DB) UpdateUser(userID int, newEmail string, newHashPass []byte) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+
+	tempUser, ok := dbStructure.Users[userID]
+	if !ok {
+		return User{}, ErrNotExist
+	}
+	tempUser.EmailID = newEmail
+	tempUser.Password = newHashPass
+	dbStructure.Users[userID] = tempUser
+
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return User{}, err
+	}
+
+	return tempUser, nil
+}
+
 func (db *DB) GetUser(emailAdd string) (User, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {

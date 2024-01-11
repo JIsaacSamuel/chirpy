@@ -28,7 +28,7 @@ type Chirp struct {
 type User struct {
 	EmailID string `json:"email"`
 	ID      int    `json:"id"`
-	Token   string `json:"token"`
+	// Token   string `json:"token"`
 }
 
 type apiConfig struct {
@@ -67,7 +67,7 @@ func main() {
 	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
 	apiRouter.Post("/users", apiCfg.handlerUserCreate)
 	apiRouter.Post("/login", apiCfg.handlerUserValidate)
-	// apiRouter.Put("/users",)
+	apiRouter.Put("/users", apiCfg.handlerUserUpdate)
 	router.Mount("/api", apiRouter)
 
 	adminRouter := chi.NewRouter()
@@ -254,10 +254,58 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// func (cfg *apiConfig) handlerUserUpdate(w http.ResponseWriter, r *http.Request) {
-// 	r.Header.Get("Authorization")
+func (cfg *apiConfig) handlerUserUpdate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+		Pass  string `json:"password"`
+	}
 
-// }
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		respondWithError(w, 401, "Error: Authorization not included")
+		return
+	}
+	tempSlice := strings.Split(authHeader, " ")
+	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
+		respondWithError(w, 401, "Error: Malformed Authorization header")
+		return
+	}
+	subject, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig)
+	if err != nil {
+		respondWithError(w, 401, "Error: Malformed Authorization header")
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(params.Pass), 10)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't hash password")
+		return
+	}
+
+	userIDInt, err := strconv.Atoi(subject)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't parse user ID")
+		return
+	}
+
+	user, err := cfg.DB.UpdateUser(userIDInt, params.Email, hashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create user")
+		return
+	}
+
+	respondWithJSON(w, 200, User{
+		ID:      user.ID,
+		EmailID: user.EmailID,
+	})
+}
 
 func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
@@ -288,6 +336,13 @@ func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request
 	if bcrypt.CompareHashAndPassword(pass.Password, []byte(params.Pass)) != nil {
 		respondWithError(w, 401, "Incorrect password")
 		return
+	}
+
+	defaultExpiration := 60 * 60 * 24
+	if params.ExpiryTime == 0 {
+		params.ExpiryTime = defaultExpiration
+	} else if params.ExpiryTime > defaultExpiration {
+		params.ExpiryTime = defaultExpiration
 	}
 
 	token, err := auth.MakeJWT(pass.ID, cfg.SecSig, time.Duration(params.ExpiryTime))
