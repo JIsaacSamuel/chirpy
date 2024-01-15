@@ -21,8 +21,9 @@ import (
 )
 
 type Chirp struct {
-	Body string `json:"body"`
-	ID   int    `json:"id"`
+	AuthID int    `json:"author_id"`
+	Body   string `json:"body"`
+	ID     int    `json:"id"`
 }
 
 type User struct {
@@ -69,6 +70,7 @@ func main() {
 	apiRouter.Post("/chirps", apiCfg.handlerChirpsCreate)
 	apiRouter.Get("/chirps", apiCfg.handlerChirpsRetrieve)
 	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
+	apiRouter.Delete("/chirps/{chirpsID}", apiCfg.handlerChirpsDelete)
 	apiRouter.Post("/users", apiCfg.handlerUserCreate)
 	apiRouter.Post("/login", apiCfg.handlerUserValidate)
 	apiRouter.Post("/refresh", apiCfg.handlerRefresh)
@@ -128,6 +130,19 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(dat)
 }
 
+func getAuthorization(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return "", errors.New("Authorization not included")
+	}
+	tempSlice := strings.Split(authHeader, " ")
+	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
+		return "", errors.New("Malformed Authorization header")
+	}
+
+	return tempSlice[1], nil
+}
+
 func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
 	dbChirps, err := cfg.DB.GetChirps()
 	if err != nil {
@@ -138,8 +153,9 @@ func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Reque
 	chirps := []Chirp{}
 	for _, dbChirp := range dbChirps {
 		chirps = append(chirps, Chirp{
-			ID:   dbChirp.ID,
-			Body: dbChirp.Body,
+			ID:     dbChirp.ID,
+			Body:   dbChirp.Body,
+			AuthID: dbChirp.UserID,
 		})
 	}
 
@@ -189,16 +205,55 @@ func (cfg *apiConfig) handlerChirpsCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	chirp, err := cfg.DB.CreateChirp(cleaned)
+	token, err := getAuthorization(r)
+	id, err := auth.ValidateJWT(token, cfg.SecSig, "chirpy-access")
+	strid, err := strconv.Atoi(id)
+
+	chirp, err := cfg.DB.CreateChirp(cleaned, strid)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create chirp")
 		return
 	}
 
 	respondWithJSON(w, http.StatusCreated, Chirp{
-		ID:   chirp.ID,
-		Body: chirp.Body,
+		ID:     chirp.ID,
+		Body:   chirp.Body,
+		AuthID: strid,
 	})
+}
+
+func (cfg *apiConfig) handlerChirpsDelete(w http.ResponseWriter, r *http.Request) {
+	token, err := getAuthorization(r)
+	if err != nil {
+		respondWithError(w, 401, "Malformed header")
+		return
+	}
+
+	strUserID, err := auth.ValidateJWT(token, cfg.SecSig, "chirpy-access")
+	if err != nil {
+		respondWithError(w, 402, "Invalid token")
+		return
+	}
+	UserID, err := strconv.Atoi(strUserID)
+
+	param := chi.URLParam(r, "chirpsID")
+	v, err := strconv.Atoi(param)
+	if err != nil {
+		log.Fatal("Enter a valid chirp ID")
+	}
+
+	if UserID != v {
+		respondWithError(w, 403, "Unauthorized action")
+		return
+	}
+
+	err = cfg.DB.DeleteChirpByID(v)
+	if err != nil {
+		respondWithError(w, 403, "Unauthorized action")
+		return
+	}
+
+	w.WriteHeader(200)
 }
 
 func validateChirp(body string) (string, error) {
@@ -266,17 +321,12 @@ func (cfg *apiConfig) handlerUserUpdate(w http.ResponseWriter, r *http.Request) 
 		Pass  string `json:"password"`
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		respondWithError(w, 401, "Error: Authorization not included")
+	token, err := getAuthorization(r)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
 		return
 	}
-	tempSlice := strings.Split(authHeader, " ")
-	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
-		respondWithError(w, 401, "Error: Malformed Authorization header")
-		return
-	}
-	subject, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-access")
+	subject, err := auth.ValidateJWT(token, cfg.SecSig, "chirpy-access")
 	if err != nil {
 		respondWithError(w, 401, "Error: Malformed Authorization header")
 	}
@@ -365,23 +415,18 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		respondWithError(w, 404, "Error: Authorization not included")
-		return
+	token, err := getAuthorization(r)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
 	}
-	tempSlice := strings.Split(authHeader, " ")
-	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
-		respondWithError(w, 403, "Error: Malformed Authorization header")
-		return
-	}
-	subID, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-refresh")
+
+	subID, err := auth.ValidateJWT(token, cfg.SecSig, "chirpy-refresh")
 	if err != nil {
 		respondWithError(w, 401, "Invalid token")
 		return
 	}
 
-	val, err := cfg.DB.IsTokenRevoked(tempSlice[1])
+	val, err := cfg.DB.IsTokenRevoked(token)
 	if val {
 		respondWithError(w, 401, "Resfresh token revoked already")
 		return
@@ -391,7 +436,6 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 	isubID, err := strconv.Atoi(subID)
 
 	token_access, err := auth.MakeJWT(isubID, cfg.SecSig, "chirpy-access", time.Duration(access_time))
-	// token_ref, err := auth.MakeJWT(pass.ID, cfg.SecSig, "chirpy-refresh", time.Duration(ref_time))
 
 	respondWithJSON(w, http.StatusOK, response{
 		Token: token_access,
@@ -399,22 +443,16 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		respondWithError(w, 401, "Error: Authorization not included")
-		return
+	token, err := getAuthorization(r)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
 	}
-	tempSlice := strings.Split(authHeader, " ")
-	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
-		respondWithError(w, 401, "Error: Malformed Authorization header")
-		return
-	}
-	_, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-refresh")
+	_, err = auth.ValidateJWT(token, cfg.SecSig, "chirpy-refresh")
 	if err != nil {
 		respondWithError(w, 401, "Invalid token")
 		return
 	}
-	err = cfg.DB.RevokeToken(tempSlice[1])
+	err = cfg.DB.RevokeToken(token)
 	if err != nil {
 		respondWithError(w, 401, "Unable to revoke token")
 	}

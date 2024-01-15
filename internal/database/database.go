@@ -26,8 +26,9 @@ type DBStructure struct {
 }
 
 type Chirp struct {
-	Body string `json:"body"`
-	ID   int    `json:"id"`
+	UserID int    `json:"author_id"`
+	Body   string `json:"body"`
+	ID     int    `json:"id"`
 }
 
 type Revocation struct {
@@ -37,7 +38,7 @@ type Revocation struct {
 
 var ErrNotExist = errors.New("resource does not exist")
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body string, iD int) (Chirp, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
@@ -45,8 +46,9 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 
 	id := len(dbStructure.Chirps) + 1
 	chirp := Chirp{
-		ID:   id,
-		Body: body,
+		ID:     id,
+		Body:   body,
+		UserID: iD,
 	}
 	dbStructure.Chirps[id] = chirp
 
@@ -85,6 +87,24 @@ func (db *DB) GetChirpByID(num int) (string, error) {
 	}
 
 	return "", errors.New("Nothing")
+}
+
+func (db *DB) DeleteChirpByID(num int) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	if _, ok := dbStructure.Chirps[num]; ok {
+		delete(dbStructure.Chirps, num)
+	}
+
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func NewDB(path string) (*DB, error) {
