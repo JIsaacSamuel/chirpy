@@ -381,7 +381,8 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := cfg.RevokeDB[tempSlice[1]]; ok == true {
+	val, err := cfg.DB.IsTokenRevoked(tempSlice[1])
+	if val {
 		respondWithError(w, 401, "Resfresh token revoked already")
 		return
 	}
@@ -413,7 +414,10 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Invalid token")
 		return
 	}
-	cfg.RevokeDB[tempSlice[1]] = time.Now()
+	err = cfg.DB.RevokeToken(tempSlice[1])
+	if err != nil {
+		respondWithError(w, 401, "Unable to revoke token")
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)

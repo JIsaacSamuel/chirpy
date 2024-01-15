@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"time"
 )
 
 type DB struct {
@@ -19,13 +20,19 @@ type User struct {
 }
 
 type DBStructure struct {
-	Chirps map[int]Chirp `json:"chirps"`
-	Users  map[int]User  `json:"users"`
+	Chirps      map[int]Chirp         `json:"chirps"`
+	Users       map[int]User          `json:"users"`
+	Revocations map[string]Revocation `json:"revocations"`
 }
 
 type Chirp struct {
 	Body string `json:"body"`
 	ID   int    `json:"id"`
+}
+
+type Revocation struct {
+	Token     string    `json:"token"`
+	RevokedAt time.Time `json:"revoked_at"`
 }
 
 var ErrNotExist = errors.New("resource does not exist")
@@ -157,8 +164,9 @@ func (db *DB) GetUser(emailAdd string) (User, error) {
 
 func (db *DB) createDB() error {
 	dbStructure := DBStructure{
-		Chirps: map[int]Chirp{},
-		Users:  map[int]User{},
+		Chirps:      map[int]Chirp{},
+		Users:       map[int]User{},
+		Revocations: map[string]Revocation{},
 	}
 	return db.writeDB(dbStructure)
 }
@@ -202,4 +210,42 @@ func (db *DB) writeDB(dbStructure DBStructure) error {
 		return err
 	}
 	return nil
+}
+
+func (db *DB) RevokeToken(token string) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	revocation := Revocation{
+		Token:     token,
+		RevokedAt: time.Now().UTC(),
+	}
+	dbStructure.Revocations[token] = revocation
+
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DB) IsTokenRevoked(token string) (bool, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return false, err
+	}
+
+	revocation, ok := dbStructure.Revocations[token]
+	if !ok {
+		return false, nil
+	}
+
+	if revocation.RevokedAt.IsZero() {
+		return false, nil
+	}
+
+	return true, nil
 }
