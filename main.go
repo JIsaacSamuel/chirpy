@@ -35,6 +35,7 @@ type apiConfig struct {
 	fileserverHits int
 	DB             *database.DB
 	SecSig         string
+	RevokeDB       map[string]time.Time
 }
 
 func main() {
@@ -48,10 +49,13 @@ func main() {
 	godotenv.Load()
 	jwtSecret := os.Getenv("JWT_SECRET")
 
+	req := make(map[string]time.Time)
+
 	apiCfg := apiConfig{
 		fileserverHits: 0,
 		DB:             db,
 		SecSig:         jwtSecret,
+		RevokeDB:       req,
 	}
 
 	router := chi.NewRouter()
@@ -67,6 +71,8 @@ func main() {
 	apiRouter.Get("/chirps/{chirpsID}", apiCfg.handlerChirpsRetrieveID)
 	apiRouter.Post("/users", apiCfg.handlerUserCreate)
 	apiRouter.Post("/login", apiCfg.handlerUserValidate)
+	apiRouter.Post("/refresh", apiCfg.handlerRefresh)
+	apiRouter.Post("/revoke", apiCfg.handlerRevoke)
 	apiRouter.Put("/users", apiCfg.handlerUserUpdate)
 	router.Mount("/api", apiRouter)
 
@@ -270,7 +276,7 @@ func (cfg *apiConfig) handlerUserUpdate(w http.ResponseWriter, r *http.Request) 
 		respondWithError(w, 401, "Error: Malformed Authorization header")
 		return
 	}
-	subject, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig)
+	subject, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-access")
 	if err != nil {
 		respondWithError(w, 401, "Error: Malformed Authorization header")
 	}
@@ -316,7 +322,8 @@ func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request
 
 	type response struct {
 		User
-		Token string `json:"token"`
+		Token  string `json:"token"`
+		Token2 string `json:"refresh_token"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -338,22 +345,78 @@ func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	defaultExpiration := 60 * 60 * 24
-	if params.ExpiryTime == 0 {
-		params.ExpiryTime = defaultExpiration
-	} else if params.ExpiryTime > defaultExpiration {
-		params.ExpiryTime = defaultExpiration
-	}
+	access_time := 60 * 60 * time.Second
+	ref_time := 60 * 24 * access_time
 
-	token, err := auth.MakeJWT(pass.ID, cfg.SecSig, time.Duration(params.ExpiryTime))
+	token_access, err := auth.MakeJWT(pass.ID, cfg.SecSig, "chirpy-access", time.Duration(access_time))
+	token_ref, err := auth.MakeJWT(pass.ID, cfg.SecSig, "chirpy-refresh", time.Duration(ref_time))
 
 	respondWithJSON(w, http.StatusOK, response{
 		User: User{
 			ID:      pass.ID,
 			EmailID: pass.EmailID,
 		},
-		Token: token,
+		Token:  token_access,
+		Token2: token_ref,
 	})
+}
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Token string `json:"token"`
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		respondWithError(w, 404, "Error: Authorization not included")
+		return
+	}
+	tempSlice := strings.Split(authHeader, " ")
+	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
+		respondWithError(w, 403, "Error: Malformed Authorization header")
+		return
+	}
+	subID, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-refresh")
+	if err != nil {
+		respondWithError(w, 401, "Invalid token")
+		return
+	}
+
+	if _, ok := cfg.RevokeDB[tempSlice[1]]; ok == true {
+		respondWithError(w, 401, "Resfresh token revoked already")
+		return
+	}
+
+	access_time := 60 * 60 * time.Second
+	isubID, err := strconv.Atoi(subID)
+
+	token_access, err := auth.MakeJWT(isubID, cfg.SecSig, "chirpy-access", time.Duration(access_time))
+	// token_ref, err := auth.MakeJWT(pass.ID, cfg.SecSig, "chirpy-refresh", time.Duration(ref_time))
+
+	respondWithJSON(w, http.StatusOK, response{
+		Token: token_access,
+	})
+}
+
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		respondWithError(w, 401, "Error: Authorization not included")
+		return
+	}
+	tempSlice := strings.Split(authHeader, " ")
+	if len(tempSlice) < 2 || tempSlice[0] != "Bearer" {
+		respondWithError(w, 401, "Error: Malformed Authorization header")
+		return
+	}
+	_, err := auth.ValidateJWT(tempSlice[1], cfg.SecSig, "chirpy-refresh")
+	if err != nil {
+		respondWithError(w, 401, "Invalid token")
+		return
+	}
+	cfg.RevokeDB[tempSlice[1]] = time.Now()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {

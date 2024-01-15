@@ -1,16 +1,17 @@
 package auth
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func MakeJWT(userID int, tokenSecret string, expiresIn time.Duration) (string, error) {
+func MakeJWT(userID int, tokenSecret, issuedBy string, expiresIn time.Duration) (string, error) {
 	claims := &jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(time.Second * expiresIn)),
-		Issuer:    "chirpy",
+		Issuer:    issuedBy,
 		IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
 		Subject:   strconv.Itoa(userID),
 	}
@@ -18,7 +19,7 @@ func MakeJWT(userID int, tokenSecret string, expiresIn time.Duration) (string, e
 	return token.SignedString([]byte(tokenSecret))
 }
 
-func ValidateJWT(tokenString, tokenSecret string) (string, error) {
+func ValidateJWT(tokenString, tokenSecret, checkpram string) (string, error) {
 	claimsStruct := jwt.RegisteredClaims{}
 	token, err := jwt.ParseWithClaims(
 		tokenString,
@@ -27,6 +28,9 @@ func ValidateJWT(tokenString, tokenSecret string) (string, error) {
 	)
 	if err != nil {
 		return "", err
+	}
+	if val, _ := token.Claims.GetIssuer(); val != checkpram {
+		return "", errors.New("Invalid JWT")
 	}
 
 	userIDString, err := token.Claims.GetSubject()
