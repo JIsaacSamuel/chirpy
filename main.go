@@ -27,9 +27,9 @@ type Chirp struct {
 }
 
 type User struct {
-	EmailID string `json:"email"`
-	ID      int    `json:"id"`
-	// Token   string `json:"token"`
+	EmailID      string `json:"email"`
+	ID           int    `json:"id"`
+	Subscription bool   `json:"is_chirpy_red"`
 }
 
 type apiConfig struct {
@@ -76,6 +76,7 @@ func main() {
 	apiRouter.Post("/refresh", apiCfg.handlerRefresh)
 	apiRouter.Post("/revoke", apiCfg.handlerRevoke)
 	apiRouter.Put("/users", apiCfg.handlerUserUpdate)
+	apiRouter.Post("/polka/webhooks", apiCfg.handlerPolkaWebhook)
 	router.Mount("/api", apiRouter)
 
 	adminRouter := chi.NewRouter()
@@ -310,8 +311,9 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, http.StatusCreated, User{
-		ID:      user.ID,
-		EmailID: user.EmailID,
+		ID:           user.ID,
+		EmailID:      user.EmailID,
+		Subscription: false,
 	})
 }
 
@@ -403,13 +405,15 @@ func (cfg *apiConfig) handlerUserValidate(w http.ResponseWriter, r *http.Request
 
 	respondWithJSON(w, http.StatusOK, response{
 		User: User{
-			ID:      pass.ID,
-			EmailID: pass.EmailID,
+			ID:           pass.ID,
+			EmailID:      pass.EmailID,
+			Subscription: pass.Subscription,
 		},
 		Token:  token_access,
 		Token2: token_ref,
 	})
 }
+
 func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 	type response struct {
 		Token string `json:"token"`
@@ -440,6 +444,46 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, response{
 		Token: token_access,
 	})
+}
+
+func (cfg *apiConfig) handlerPolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type requ struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID int `json:"user_id"`
+		} `json:"data"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := requ{}
+	err := decoder.Decode(&params)
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(200)
+		return
+	}
+
+	if err != nil {
+		respondWithError(w, 404, "Malformed webhook")
+		return
+	}
+
+	resUser, err := cfg.DB.GetUserID(params.Data.UserID)
+	if err != nil {
+		respondWithError(w, 404, "User not found")
+		return
+	}
+
+	resUser.Subscription = true
+
+	err = cfg.DB.GenUpdateUser(resUser, params.Data.UserID)
+	if err != nil {
+		respondWithError(w, 404, "Couldn't process subscription")
+		return
+	}
+
+	w.WriteHeader(200)
+	return
 }
 
 func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {

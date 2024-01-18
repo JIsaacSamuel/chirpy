@@ -14,9 +14,10 @@ type DB struct {
 }
 
 type User struct {
-	EmailID  string `json:"email"`
-	ID       int    `json:"id"`
-	Password []byte `json:"password"`
+	EmailID      string `json:"email"`
+	ID           int    `json:"id"`
+	Password     []byte `json:"password"`
+	Subscription bool   `json:"is_chirpy_red"`
 }
 
 type DBStructure struct {
@@ -167,6 +168,26 @@ func (db *DB) UpdateUser(userID int, newEmail string, newHashPass []byte) (User,
 	return tempUser, nil
 }
 
+func (db *DB) GenUpdateUser(updatedUser User, userID int) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+
+	_, ok := dbStructure.Users[userID]
+	if !ok {
+		return ErrNotExist
+	}
+	dbStructure.Users[userID] = updatedUser
+
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (db *DB) GetUser(emailAdd string) (User, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {
@@ -175,6 +196,21 @@ func (db *DB) GetUser(emailAdd string) (User, error) {
 
 	for key, value := range dbStructure.Users {
 		if value.EmailID == emailAdd {
+			return dbStructure.Users[key], nil
+		}
+	}
+
+	return User{}, errors.New("User not found")
+}
+
+func (db *DB) GetUserID(IDNum int) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+
+	for key, value := range dbStructure.Users {
+		if value.ID == IDNum {
 			return dbStructure.Users[key], nil
 		}
 	}
