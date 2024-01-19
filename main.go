@@ -37,6 +37,7 @@ type apiConfig struct {
 	DB             *database.DB
 	SecSig         string
 	RevokeDB       map[string]time.Time
+	PolkaKey       string
 }
 
 func main() {
@@ -48,7 +49,8 @@ func main() {
 		log.Fatal(err)
 	}
 	godotenv.Load()
-	jwtSecret := os.Getenv("JWT_SECRET")
+	jwtSecret := os.Getenv("JWTSECRET")
+	// polkaKey := os.Getenv("POLKAKEY")
 
 	req := make(map[string]time.Time)
 
@@ -57,6 +59,7 @@ func main() {
 		DB:             db,
 		SecSig:         jwtSecret,
 		RevokeDB:       req,
+		PolkaKey:       "f271c81ff7084ee5b99a5091b42d486e",
 	}
 
 	router := chi.NewRouter()
@@ -144,11 +147,37 @@ func getAuthorization(r *http.Request) (string, error) {
 	return tempSlice[1], nil
 }
 
+func getPolkaKey(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return "", errors.New("Authorization not included")
+	}
+	tempSlice := strings.Split(authHeader, " ")
+	if len(tempSlice) < 2 || tempSlice[0] != "ApiKey" {
+		return "", errors.New("Malformed Authorization header")
+	}
+
+	return tempSlice[1], nil
+}
+
 func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.DB.GetChirps()
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
-		return
+	s := r.URL.Query().Get("author_id")
+	dbChirps := []database.Chirp{}
+	var err error
+	if s == "" {
+		dbChirps, err = cfg.DB.GetChirps()
+		if err != nil {
+			respondWithError(w, 401, "Couldn't fetch Chirps")
+		}
+	} else {
+		temps, err := strconv.Atoi(s)
+		if err != nil {
+			respondWithError(w, 402, "Invalid query")
+		}
+		dbChirps, err = cfg.DB.GetChirpsID(temps)
+		if err != nil {
+			respondWithError(w, 402, "Invalidy query")
+		}
 	}
 
 	chirps := []Chirp{}
@@ -160,9 +189,16 @@ func (cfg *apiConfig) handlerChirpsRetrieve(w http.ResponseWriter, r *http.Reque
 		})
 	}
 
-	sort.Slice(chirps, func(i, j int) bool {
-		return chirps[i].ID < chirps[j].ID
-	})
+	order := r.URL.Query().Get("sort")
+	if order == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].ID > chirps[j].ID
+		})
+	} else {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].ID < chirps[j].ID
+		})
+	}
 
 	respondWithJSON(w, http.StatusOK, chirps)
 }
@@ -457,20 +493,29 @@ func (cfg *apiConfig) handlerPolkaWebhook(w http.ResponseWriter, r *http.Request
 	decoder := json.NewDecoder(r.Body)
 	params := requ{}
 	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 404, "Malformed webhook")
+		return
+	}
 
 	if params.Event != "user.upgraded" {
 		w.WriteHeader(200)
 		return
 	}
 
-	if err != nil {
-		respondWithError(w, 404, "Malformed webhook")
-		return
-	}
-
 	resUser, err := cfg.DB.GetUserID(params.Data.UserID)
 	if err != nil {
 		respondWithError(w, 404, "User not found")
+		return
+	}
+
+	givenPolkaKey, err := getPolkaKey(r)
+	if err != nil {
+		respondWithError(w, 401, err.Error())
+	}
+
+	if givenPolkaKey != cfg.PolkaKey {
+		respondWithError(w, 402, cfg.PolkaKey)
 		return
 	}
 
